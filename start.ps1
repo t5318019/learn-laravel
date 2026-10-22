@@ -40,14 +40,33 @@ if ($LASTEXITCODE -ne 0) {
     throw "php -v failed with exit code $LASTEXITCODE."
 }
 
-# Enable HTTPS for Composer when PHP has no configuration yet.
+# Configure extensions for PHP and Composer.
 $phpIni = Join-Path $phpDirectory 'php.ini'
+$extensionDirectory = (Join-Path $phpDirectory 'ext').Replace('\', '/')
 if (-not (Test-Path -LiteralPath $phpIni -PathType Leaf)) {
-    $extensionDirectory = (Join-Path $phpDirectory 'ext').Replace('\', '/')
     @"
 extension_dir = "$extensionDirectory"
 extension=openssl
 "@ | Set-Content -LiteralPath $phpIni -Encoding UTF8
+}
+
+$phpIniContent = [IO.File]::ReadAllText($phpIni)
+if ($phpIniContent -notmatch '(?im)^\s*extension_dir\s*=') {
+    $phpIniContent += "`r`nextension_dir = `"$extensionDirectory`"`r`n"
+}
+foreach ($extension in @('mbstring', 'curl', 'fileinfo', 'pdo_sqlite')) {
+    $extensionPattern = '(?im)^\s*extension\s*=\s*"?(?:php_)?' + [regex]::Escape($extension) + '(?:\.dll)?"?\s*(?:;[^\r\n]*)?$'
+    if ($phpIniContent -notmatch $extensionPattern) {
+        $phpIniContent += "`r`nextension=$extension`r`n"
+    }
+}
+[IO.File]::WriteAllText($phpIni, $phpIniContent, [Text.UTF8Encoding]::new($false))
+
+foreach ($extension in @('mbstring', 'curl', 'fileinfo', 'pdo_sqlite')) {
+    & $phpExecutable -c $phpIni -r "exit(extension_loaded('$extension') ? 0 : 1);"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to enable the PHP $extension extension."
+    }
 }
 
 $composerPhar = Join-Path $phpDirectory 'composer.phar'
